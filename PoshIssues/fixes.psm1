@@ -5,11 +5,13 @@ enum IssueFixStatus {
     Error
     Canceled
     Hold
+    Scheduled
 }
 
-enum IssueCheckStatus {
-    Enabled
-    Disabled
+enum IssueFixPriority {
+        Low
+        Medium
+        High
 }
 
 <#
@@ -40,6 +42,15 @@ Set the number of times notices is sent about this fix.  Usefull for scheduled n
 .PARAMETER SequenceNumber
 Fix sort order.  Default is 1.
 
+.PARAMETER ScheduledAfter
+DateTime (defaults to current) in which the fix is able to be invoked when status is also Scheduled
+
+.PARAMETER Priority
+Priority High, Meduim or Low.  Defaults to Low.
+
+.PARAMETER useCommandAsDescription
+Switch to ignore the passed description, if any, and instead use the command as a string value for description.
+
 .INPUTS
 ScriptBlock representing the script that will be invoked by the fix
 String representing the script that will be invoked by the fix
@@ -65,14 +76,28 @@ function New-IssueFix {
                 [Parameter(Mandatory=$false,Position=4,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$true)]
                 [System.Int64] $NotificationCount = 10000,
                 [Parameter(Mandatory=$false,Position=5,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$true)]
-                [System.Int64] $SequenceNumber = 1
+                [System.Int64] $SequenceNumber = 1,
+                [Parameter(Mandatory=$false,Position=5,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$true)]
+                [System.DateTime] $ScheduledAfter,
+                [Parameter(Mandatory=$false,Position=5,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$true)]
+                [IssueFixPriority] $Priority = 0,
+                [Parameter(Mandatory=$false,Position=6,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$false)]
+                [Switch] $useCommandAsDescription
 	)
 	Process {
                 $_return = New-Object -TypeName PSObject
                 $_return.PSObject.TypeNames.Insert(0,'PoshIssues.Fix')
 
-                If ($FixCommandString) {
+                If ($PSBoundParameters.ContainsKey('FixCommandString')) {
                         $FixCommand = [scriptblock]::Create($FixCommandString)
+                }
+
+                if ($PSBoundParameters.ContainsKey('useCommandAsDescription')) {
+                        $FixDescription = $FixCommand.ToString()
+                }
+
+                if (!($PSBoundParameters.ContainsKey('ScheduledAfter'))) {
+                        [System.DateTime] $ScheduledAfter = (Get-Date)
                 }
 
                 Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixCommand" -Value $FixCommand
@@ -81,8 +106,36 @@ function New-IssueFix {
                 Add-Member -InputObject $_return -MemberType NoteProperty -Name "_status" -Value ([Int64] $Status)
                 Add-Member -InputObject $_return -MemberType NoteProperty -Name "notificationCount" -Value ([Int64] $NotificationCount)
                 Add-Member -InputObject $_return -MemberType NoteProperty -Name "sequenceNumber" -Value ([Int64] $SequenceNumber)
-                Add-Member -InputObject $_return -MemberType NoteProperty -Name "creationDateTime" -Value ([DateTime] (Get-Date))
-                Add-Member -InputObject $_return -MemberType NoteProperty -Name "statusDateTime" -Value ([DateTime] (Get-Date))
+                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_creationDateTimeUTC" -Value ([System.TimeZoneInfo]::ConvertTimeToUtc([DateTime] (Get-Date)))
+                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_statusDateTimeUTC" -Value ([System.TimeZoneInfo]::ConvertTimeToUtc([DateTime] (Get-Date)))
+                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_scheduledAfterUTC" -Value ([System.TimeZoneInfo]::ConvertTimeToUtc([DateTime] $ScheduledAfter))
+                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_priority" -Value ([Int64] $Priority)
+
+                #Date methods for local time zone
+                Add-Member -InputObject $_return -MemberType ScriptProperty -Name creationDateTime `
+                {  #Get as local time zone
+                        return $this._creationDateTimeUTC.ToLocalTime()
+                } `
+                {  #Set to UTC
+                        param([DateTime] $date)
+                        $this._creationDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                }
+                Add-Member -InputObject $_return -MemberType ScriptProperty -Name statusDateTime `
+                {  #Get as local time zone
+                        return $this._statusDateTimeUTC.ToLocalTime()
+                } `
+                {  #Set to UTC
+                        param([DateTime] $date)
+                        $this._statusDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                }
+                Add-Member -InputObject $_return -MemberType ScriptProperty -Name scheduledAfter `
+                {  #Get as local time zone
+                        return $this._scheduledAfterUTC.ToLocalTime()
+                } `
+                {  #Set to UTC
+                        param([DateTime] $date)
+                        $this._scheduledAfterUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                }
 
                 #Calculate iD
                 $StringBuilder = New-Object System.Text.StringBuilder 
@@ -100,6 +153,17 @@ function New-IssueFix {
                         [IssueFixStatus] $status
                         )
                         $this._status = ([IssueFixStatus]::$Status).value__
+                }
+
+                Add-Member -InputObject $_return -MemberType ScriptProperty -Name "priority" -Value `
+                { #Get
+                        return [IssueFixPriority]::([enum]::getValues([IssueFixPriority]) | Where-Object value__ -eq $this._priority)
+                } `
+                { #Set
+                        param (
+                                [IssueFixPriority] $priority
+                        )
+                        $this._priority = ([IssueFixPriority]::$priority).value__
                 }
 
                 Write-Output $_return
@@ -162,8 +226,10 @@ function Write-IssueFix {
                                 "fixResults" = $Fix.fixResults;
                                 "statusInt" = $Fix._status;
                                 "notificationCount" = $Fix.notificationCount;
-                                "creationDateTime" = $Fix.creationDateTime;
-                                "statusDateTime" = $Fix.statusDateTime
+                                "creationDateTimeUTC" = $Fix._creationDateTimeUTC;
+                                "statusDateTimeUTC" = $Fix._statusDateTimeUTC;
+                                "scheduledAfterUTC" = $Fix._scheduledAfterUTC;
+                                "priorityInt" = $Fix._priority
                         }
                         $_path = ""
                         If ($DatabasePath) {
@@ -411,7 +477,9 @@ function Read-IssueFix {
                 [Parameter(Mandatory=$false,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$false)]
                 [Switch] $isCanceled,
                 [Parameter(Mandatory=$false,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$false)]
-                [Switch] $isHold
+                [Switch] $isHold,
+                [Parameter(Mandatory=$false,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$false)]
+                [Switch] $isScheduled
         )
 	Process {
                 $items = @()
@@ -435,16 +503,58 @@ function Read-IssueFix {
                         $_return = New-Object -TypeName PSObject
                         $_return.PSObject.TypeNames.Insert(0,'PoshIssues.Fix')
                         [ScriptBlock] $_script = [ScriptBlock]::Create([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($_fix.fixCommandBase64)))
+
+                        #Build out properties
                         Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixCommand" -Value $_script
                         Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixDescription" -Value $_fix.fixDescription
                         Add-Member -InputObject $_return -MemberType NoteProperty -Name "checkName" -Value $_fix.checkName
                         Add-Member -InputObject $_return -MemberType NoteProperty -Name "_status" -Value ([Int64] $_fix.statusInt)
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_priority" -Value ([Int64] $_fix.priorityInt)
                         Add-Member -InputObject $_return -MemberType NoteProperty -Name "notificationCount" -Value ([Int64] $_fix.notificationCount)
                         Add-Member -InputObject $_return -MemberType NoteProperty -Name "sequenceNumber" -Value ([Int64] $_fix.sequenceNumber)
                         Add-Member -InputObject $_return -MemberType NoteProperty -Name "iD" -Value $_fix.id
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "databasePath" -Value $DatabasePath -Force
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "creationDateTime" -Value ([DateTime] $_fix.creationDateTime) -Force
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "statusDateTime" -Value ([DateTime] $_fix.creationDateTime) -Force
+
+                        #Date methods for local time zone
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_creationDateTimeUTC" -Value ([DateTime] $_fix.creationDateTimeUTC) -Force
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_statusDateTimeUTC" -Value ([DateTime] $_fix.statusDateTimeUTC) -Force
+                        #Need to handle older files that are missing the scheduledAfter property
+                        if ($null -eq $_fix.scheduledAfterUTC) {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_scheduledAfterUTC" -Value ([DateTime] (Get-Date)) -Force        
+                        } else {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_scheduledAfterUTC" -Value ([DateTime] $_fix.scheduledAfterUTC) -Force
+                        }
+
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name creationDateTime `
+                        {  #Get as local time zone
+                                return $this._creationDateTimeUTC.ToLocalTime()
+                        } `
+                        {  #Set to UTC
+                                param([DateTime] $date)
+                                $this._creationDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                        }
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name statusDateTime `
+                        {  #Get as local time zone
+                                return $this._statusDateTimeUTC.ToLocalTime()
+                        } `
+                        {  #Set to UTC
+                                param([DateTime] $date)
+                                $this._statusDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                        }
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name scheduledAfter `
+                        {  #Get as local time zone
+                                return $this._scheduledAfterUTC.ToLocalTime()
+                        } `
+                        {  #Set to UTC
+                                param([DateTime] $date)
+                                $this._scheduledAfterUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                        }
+
+                        #Handle databasePath or path.
+                        if ($_fix.databasePath) {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "databasePath" -Value $DatabasePath -Force
+                        } else {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "path" -Value $Path -Force
+                        }
 
                         if ("fixResults" -in $_fix.PSobject.Properties.Name) {
                                 Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixResults" -Value $_fix.fixResults -Force
@@ -460,7 +570,19 @@ function Read-IssueFix {
                                 )
                                 $this._status = ([IssueFixStatus]::$Status).value__
                         }
-                        if ($isPending -or $isComplete -or $isReady -or $isError -or $isCanceled -or $isHold) {
+
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name "priority" -Value `
+                        { #Get
+                                return [IssueFixPriority]::([enum]::getValues([IssueFixPriority]) | Where-Object value__ -eq $this._priority)
+                        } `
+                        { #Set
+                                param (
+                                [IssueFixPriority] $priority
+                                )
+                                $this._priority = ([IssueFixPriority]::$priority).value__
+                        }
+
+                        if ($isPending -or $isComplete -or $isReady -or $isError -or $isCanceled -or $isHold -or $isScheduled) {
                                 # filtering results based on status
                                 if ($isPending -and ($_return.status -eq 'Pending')) {
                                         Write-Output $_return
@@ -478,6 +600,9 @@ function Read-IssueFix {
                                         Write-Output $_return
                                 }
                                 if ($isHold -and ($_return.status -eq 'Hold')) {
+                                        Write-Output $_return
+                                }
+                                if ($isScheduled -and ($_return.status -eq 'Scheduled')) {
                                         Write-Output $_return
                                 }
                         } else {
@@ -513,6 +638,15 @@ Set the notification count of the fix to INT value.
 .PARAMETER SequenceNumber
 Set the sequence number of the fix to INT value.
 
+.PARAMETER ScheduledAfter
+Sets a dateTime when the fix should be invoked AFTER
+
+.PARAMETER Priority
+Changes the priority to either High, Medium or Low
+
+.PARAMETER DecrementNotificationCount
+Switch which changes the fix object by decrementing the notification count by 1.
+
 .EXAMPLE
 Set-IssueFix -Fix $aFixObject -Description "This is an issue fix with a new description."
 
@@ -537,7 +671,11 @@ function Set-IssueFix {
                 [System.Int64] $NotificationCount,
                 [Parameter(Mandatory=$false,Position=5,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$true)]
                 [System.Int64] $SequenceNumber,
-                [Parameter(Mandatory=$false,Position=6,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$false)]
+                [Parameter(Mandatory=$false,Position=6,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$true)]
+                [System.DateTime] $ScheduledAfter,
+                [Parameter(Mandatory=$false,Position=7,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$true)]
+                [IssueFixPriority] $Priority,
+                [Parameter(Mandatory=$false,Position=8,ValueFromPipeline=$false,ValueFromPipelineByPropertyName=$false)]
                 [Switch] $DecrementNotificationCount
 	)
 	Begin {
@@ -547,27 +685,37 @@ function Set-IssueFix {
                 #Make sure we got a fix passed
                 if ($Fix) {
                         if ($PSCmdlet.ShouldProcess("Change $($Fix.fixDescription)?")) {
-                                if ($CheckName) {
+                                if ($PSBoundParameters.ContainsKey('CheckName')) {
                                         $Fix.CheckName = $CheckName
                                 }
-                                if ($FixDescription) {
+                                if ($PSBoundParameters.ContainsKey('FixDescription')) {
                                         $Fix.fixDescription = $FixDescription
                                 }
-                                if ($Status) {
-                                        if (($Status -ge 0) -and ($Status -le 5)) {
+                                if ($PSBoundParameters.ContainsKey('Status')) {
+                                        if (($Status -ge 0) -and ($Status -le 6)) {
                                                 $Fix._status = $Status
                                                 $Fix.statusDateTime = Get-Date
                                         } else {
                                                 Write-Warning "Invalid status value"
                                         }
                                 }
-                                If ($NotificationCount) {
+                                if ($PSBoundParameters.ContainsKey('Priority')) {
+                                        if (($Priority -ge 0) -and ($Priority -le 2)) {
+                                                $Fix._priority = $Priority
+                                        } else {
+                                                Write-Warning "Invalid priority value"
+                                        }
+                                }
+                                If ($PSBoundParameters.ContainsKey('NotificationCount')) {
                                         $Fix.notificationCount = $NotificationCount
                                 }
-                                if ($SequenceNumber) {
+                                if ($PSBoundParameters.ContainsKey('SequenceNumber')) {
                                         $Fix.sequenceNumber = $SequenceNumber
                                 }
-                                if ($DecrementNotificationCount) {
+                                if ($PSBoundParameters.ContainsKey('ScheduledAfter')) {
+                                        $Fix.scheduledAfter = $ScheduledAfter
+                                }
+                                if ($PSBoundParameters.ContainsKey('DecrementNotificationCount')) {
                                         if ($Fix.notificationCount -gt 0) {
                                                 $Fix.notificationCount = $Fix.notificationCount - 1
                                         }
@@ -660,27 +808,31 @@ function Deny-IssueFix {
 }
 
 <#
-TODO:  Need to finish documenting this cmdlet
 .SYNOPSIS
-Short description
+Takes each fix object passed and invoked the scriptblock adding the results to the object.
 
 .DESCRIPTION
-Long description
+For each issue fix object passed, if the object status is
+Ready, Scheduled AND ScheduledAfter is in the past, or Force is set
+invokes the scriptblock.  Add the results to the object and sets status
+to either Complete or Error.  The scriptblock is invoked in a child scope.
 
 .PARAMETER Fix
-The issue fix object to change, typically passed via pipeline.
+The issue fix object to invoke, typically passed via pipeline.
 
 .PARAMETER Force
-Parameter description
+Invokes all passed fix objects no matter of status.
 
-.PARAMETER NoNewScope
-Parameter description
+.PARAMETER DefaultParameterValues
+Due to the child scope, DefaultParameterValues are not inherited.  If needed,
+pass existing or new DefaultParameterValues into the child scope using this parameter.
 
 .EXAMPLE
-An example
+Read-IssueFix | Invoke-IssueFix
 
 .NOTES
-General notes
+The scriptblock in invoked using the InvokeWithContext method.  DefaultParameterValues, if
+provided is passed into the context.
 
 .INPUTS
 IssueFix 
@@ -698,14 +850,9 @@ function Invoke-IssueFix {
                 [Parameter()]
                 [Switch] $Force,
                 [Parameter()]
-                [Switch] $NoNewScope,
-                [Parameter()]
                 [System.Collections.Hashtable] $DefaultParameterValues
         )
         Begin {
-                if ($NoNewScope) {
-                        Write-Warning "Parameter switch NoNewScope is no longer supported, all invokes are in a child scope."
-                }
                 $variablesToPass = New-Object System.Collections.Generic.List[System.Management.Automation.PSVariable]
                 if ($DefaultParameterValues) {
                         $variablesToPass.Add((New-Variable -Name "PSDefaultParameterValues" -Value $DefaultParameterValues -PassThru))
@@ -714,7 +861,7 @@ function Invoke-IssueFix {
 	Process {
                 #Make sure we got a fix passed
                 if ($Fix) {
-                        if (($Fix.status -eq 0) -or $Force) {
+                        if (($Fix.status -eq 0) -or $Force -or (($Fix.status -eq 6) -and ($fix.scheduledAfter -le (Get-Date)))) {
                                 if ($PSCmdlet.ShouldProcess("Invoke $($Fix.fixDescription) from $($Fix.checkName) by running $($Fix.fixCommand)?")) {
                                         Add-Member -InputObject $Fix -MemberType NoteProperty -Name "fixResults" -Value "" -Force
                                         try {
