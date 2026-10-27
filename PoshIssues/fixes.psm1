@@ -215,26 +215,10 @@ function Write-IssueFix {
 	)
 	Process {
                 #Make sure we got a fix passed
-                if ($Fix) {
-                        #Create an object to save as JSON
-                        $_fix = @{
-                                "id" = $Fix.id;
-                                "sequenceNumber" = $Fix.sequenceNumber;
-                                "checkName" = $Fix.checkName;
-                                "fixCommandBase64" = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Fix.fixCommand));
-                                "fixDescription" = $Fix.fixDescription;
-                                "fixResults" = $Fix.fixResults;
-                                "statusInt" = $Fix._status;
-                                "notificationCount" = $Fix.notificationCount;
-                                "creationDateTimeUTC" = $Fix._creationDateTimeUTC;
-                                "statusDateTimeUTC" = $Fix._statusDateTimeUTC;
-                                "scheduledAfterUTC" = $Fix._scheduledAfterUTC;
-                                "priorityInt" = $Fix._priority
-                        }
+                if ($Fix.PSObject.TypeNames[0] -eq 'PoshIssues.Fix') {
                         $_path = ""
                         If ($DatabasePath) {
                                 #Save to database path, overwriting only if Force
-                                $_fix.Add("databasePath", $DatabasePath)
                                 Add-Member -InputObject $Fix -MemberType NoteProperty -Name "databasePath" -Value $DatabasePath -Force
                                 
                                 if (!(Test-Path $DatabasePath)) {
@@ -246,23 +230,22 @@ function Write-IssueFix {
                                 $_path = "$($DatabasePath)\Fixes\$($Fix.id).json"
                         } else {
                                 #Save to path, overwriting only if Force
-                                $_fix.Add("path", $Path)
                                 Add-Member -InputObject $Fix -MemberType NoteProperty -Name "path" -Value $Path -Force
                                 $_path = $Path
                         }
 
-                        #If the file exists AND NoClobber is true not write the file
+                        #If the file exists AND NoClobber is true do not write the file
                         if ((Test-Path $_path) -and ($NoClobber)) {
                                 Write-Verbose "JSON file already exists at '$_path' and NoClobber is set."
-                                if ($passthru) {
+                                if ($PassThru) {
                                         Write-Output $Fix
                                 }
                         } else {
-                                $_json = ConvertTo-Json -InputObject $_fix
-                                Out-File -FilePath $_path -Force:$true -InputObject $_json
+                                Convert-IssueFixToJson -Fix $Fix | Out-File -FilePath $_path -Force:$true
                                 Write-Verbose "JSON saved to '$_path'."
-                                
-                                Write-Output $Fix
+                                if ($PassThru) {
+                                        Write-Output $Fix
+                                }
                         }
                 }
 	}
@@ -497,119 +480,38 @@ function Read-IssueFix {
                         }
                         $items = Get-ChildItem -Path $_folder -Recurse:$_recurse -Filter "*.json"
                 }
+                
+                # Read the JSON files and convert to IssueFix objects but before creating full object, filter based on status if any of the status switches are set.  This is done to avoid creating objects that will be filtered out later.
                 $items | Get-Content -Raw | ConvertFrom-Json | ForEach-Object {
-                        #Take the object from the JSON import and build a fix object
-                        $_fix = $_
-                        $_return = New-Object -TypeName PSObject
-                        $_return.PSObject.TypeNames.Insert(0,'PoshIssues.Fix')
-                        [ScriptBlock] $_script = [ScriptBlock]::Create([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($_fix.fixCommandBase64)))
-
-                        #Build out properties
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixCommand" -Value $_script
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixDescription" -Value $_fix.fixDescription
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "checkName" -Value $_fix.checkName
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_status" -Value ([Int64] $_fix.statusInt)
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_priority" -Value ([Int64] $_fix.priorityInt)
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "notificationCount" -Value ([Int64] $_fix.notificationCount)
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "sequenceNumber" -Value ([Int64] $_fix.sequenceNumber)
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "iD" -Value $_fix.id
-
-                        #Date methods for local time zone
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_creationDateTimeUTC" -Value ([DateTime] $_fix.creationDateTimeUTC) -Force
-                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_statusDateTimeUTC" -Value ([DateTime] $_fix.statusDateTimeUTC) -Force
-                        #Need to handle older files that are missing the scheduledAfter property
-                        if ($null -eq $_fix.scheduledAfterUTC) {
-                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_scheduledAfterUTC" -Value ([DateTime] (Get-Date)) -Force        
-                        } else {
-                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_scheduledAfterUTC" -Value ([DateTime] $_fix.scheduledAfterUTC) -Force
-                        }
-
-                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name creationDateTime `
-                        {  #Get as local time zone
-                                return $this._creationDateTimeUTC.ToLocalTime()
-                        } `
-                        {  #Set to UTC
-                                param([DateTime] $date)
-                                $this._creationDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
-                        }
-                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name statusDateTime `
-                        {  #Get as local time zone
-                                return $this._statusDateTimeUTC.ToLocalTime()
-                        } `
-                        {  #Set to UTC
-                                param([DateTime] $date)
-                                $this._statusDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
-                        }
-                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name scheduledAfter `
-                        {  #Get as local time zone
-                                return $this._scheduledAfterUTC.ToLocalTime()
-                        } `
-                        {  #Set to UTC
-                                param([DateTime] $date)
-                                $this._scheduledAfterUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
-                        }
-
-                        #Handle databasePath or path.
-                        if ($_fix.databasePath) {
-                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "databasePath" -Value $DatabasePath -Force
-                        } else {
-                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "path" -Value $Path -Force
-                        }
-
-                        if ("fixResults" -in $_fix.PSobject.Properties.Name) {
-                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixResults" -Value $_fix.fixResults -Force
-                        }
-
-                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name "status" -Value `
-                        { #Get
-                                return [IssueFixStatus]::([enum]::getValues([IssueFixStatus]) | Where-Object value__ -eq $this._status)
-                        } `
-                        { #Set
-                                param (
-                                [IssueFixStatus] $status
-                                )
-                                $this._status = ([IssueFixStatus]::$Status).value__
-                        }
-
-                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name "priority" -Value `
-                        { #Get
-                                return [IssueFixPriority]::([enum]::getValues([IssueFixPriority]) | Where-Object value__ -eq $this._priority)
-                        } `
-                        { #Set
-                                param (
-                                [IssueFixPriority] $priority
-                                )
-                                $this._priority = ([IssueFixPriority]::$priority).value__
-                        }
-
                         if ($isPending -or $isComplete -or $isReady -or $isError -or $isCanceled -or $isHold -or $isScheduled) {
                                 # filtering results based on status
-                                if ($isPending -and ($_return.status -eq 'Pending')) {
-                                        Write-Output $_return
+                                # ([Int64] $_fix.statusInt)
+                                if ($isPending -and ($_.statusInt -eq [IssueFixStatus]::Pending)) {
+                                        Write-Output $_
                                 }
-                                if ($isComplete -and ($_return.status -eq 'Complete')) {
-                                        Write-Output $_return
+                                if ($isComplete -and ($_.statusInt -eq [IssueFixStatus]::Complete)) {
+                                        Write-Output $_
                                 }
-                                if ($isReady -and ($_return.status -eq 'Ready')) {
-                                        Write-Output $_return
+                                if ($isReady -and ($_.statusInt -eq [IssueFixStatus]::Ready)) {
+                                        Write-Output $_
                                 }
-                                if ($isError -and ($_return.status -eq 'Error')) {
-                                        Write-Output $_return
+                                if ($isError -and ($_.statusInt -eq [IssueFixStatus]::Error)) {
+                                        Write-Output $_
                                 }
-                                if ($isCanceled -and ($_return.status -eq 'Canceled')) {
-                                        Write-Output $_return
+                                if ($isCanceled -and ($_.statusInt -eq [IssueFixStatus]::Canceled)) {
+                                        Write-Output $_
                                 }
-                                if ($isHold -and ($_return.status -eq 'Hold')) {
-                                        Write-Output $_return
+                                if ($isHold -and ($_.statusInt -eq [IssueFixStatus]::Hold)) {
+                                        Write-Output $_
                                 }
-                                if ($isScheduled -and ($_return.status -eq 'Scheduled')) {
-                                        Write-Output $_return
+                                if ($isScheduled -and ($_.statusInt -eq [IssueFixStatus]::Scheduled)) {
+                                        Write-Output $_
                                 }
                         } else {
                                 # return all
-                                Write-Output $_return
+                                Write-Output $_
                         }
-                } | Write-Output
+                } | ForEach-Object { Convert-JsonToIssueFix -JsonObject $_ } | Write-Output
 	}
 }
 
@@ -924,5 +826,184 @@ function Limit-IssueFix {
                         }
                 }
 
+        }
+}
+
+<#
+.SYNOPSIS
+Converts an IssueFix object to a JSON string.
+
+.DESCRIPTION
+Converts an IssueFix object to a JSON string.
+
+.PARAMETER Fix
+IssueFix object(s), typically passed via the pipeline, to be converted to a JSON string.
+
+.OUTPUTS
+String The JSON string representing the IssueFix object
+
+#>
+function Convert-IssueFixToJson {
+	[CmdletBinding(SupportsShouldProcess=$false)]
+	Param(
+                [Parameter(Mandatory=$true,Position=0,ValueFromPipeline=$true,ValueFromPipelineByPropertyName=$false)]
+                [PSObject] $Fix		
+	)
+	Process {
+                If ($Fix.PSObject.TypeNames[0] -ne 'PoshIssues.Fix') {
+                        Write-Error "Object passed is not of type PoshIssues.Fix"
+                        return
+                } else {
+                        Write-Verbose "Converting $($Fix.fixDescription) to JSON"
+                        #Create an object to save as JSON
+                        $_fix = @{
+                                "id" = $Fix.id;
+                                "sequenceNumber" = $Fix.sequenceNumber;
+                                "checkName" = $Fix.checkName;
+                                "fixCommandBase64" = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Fix.fixCommand));
+                                "fixDescription" = $Fix.fixDescription;
+                                "fixResults" = $Fix.fixResults;
+                                "statusInt" = $Fix._status;
+                                "notificationCount" = $Fix.notificationCount;
+                                "creationDateTimeUTC" = $Fix._creationDateTimeUTC;
+                                "statusDateTimeUTC" = $Fix._statusDateTimeUTC;
+                                "scheduledAfterUTC" = $Fix._scheduledAfterUTC;
+                                "priorityInt" = $Fix._priority
+                        }
+                        if ($Fix.PSObject.Properties.Name -contains "databasePath") {
+                                $_fix.Add("databasePath", $Fix.databasePath)
+                        }
+                        if ($Fix.PSObject.Properties.Name -contains "path") {
+                                $_fix.Add("path", $Fix.path)
+                        }
+                        if ($Fix.PSObject.Properties.Name -contains "uri") {
+                                $_fix.Add("uri", $Fix.uri)
+                        }
+                        ConvertTo-Json -InputObject $_fix | Write-Output
+                }
+        }
+}
+
+<#
+.SYNOPSIS
+Converts a JSON string representing an IssueFix object to an IssueFix object.
+
+.DESCRIPTION
+Converts a JSON string representing an IssueFix object to an IssueFix object.
+
+.PARAMETER Json
+String The JSON string representing the IssueFix object.
+
+.PARAMETER JsonObject
+PSObject presenting the IssueFix object just converted from JSON.  This is useful if you have already converted the JSON string to a PSObject using ConvertFrom-Json.
+
+.OUTPUTS
+IssueFix The IssueFix object created from the JSON string.
+
+#>
+function Convert-JsonToIssueFix {
+        [CmdletBinding(SupportsShouldProcess=$true,DefaultParameterSetName="Json")]
+        param (
+                [Parameter(Mandatory=$true,Position=0,ValueFromPipeline=$true,ValueFromPipelineByPropertyName=$false, ParameterSetName="Json")]
+                [string] $Json,
+                [Parameter(Mandatory=$true,Position=0,ValueFromPipeline=$true,ValueFromPipelineByPropertyName=$false, ParameterSetName="JsonObject")]
+                [PSObject] $JsonObject
+        )
+        Process {
+                if ($Json) {
+                        Write-Verbose "Converting JSON string to IssueFix object"
+                        $JsonObject = $Json | ConvertFrom-Json
+                } elseif ($JsonObject) {
+                        Write-Verbose "Converting JSON object to IssueFix object"
+                }
+                $JsonObject | ForEach-Object {
+                        #TODO: Need to add error handling for missing properties in the JSON string.  This is a problem with older files that are missing the scheduledAfter property.
+                        #Take the object from the JSON import and build a fix object
+                        $_fix = $_
+                        $_return = New-Object -TypeName PSObject
+                        $_return.PSObject.TypeNames.Insert(0,'PoshIssues.Fix')
+                        [ScriptBlock] $_script = [ScriptBlock]::Create([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($_fix.fixCommandBase64)))
+
+                        #Build out properties
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixCommand" -Value $_script
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixDescription" -Value $_fix.fixDescription
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "checkName" -Value $_fix.checkName
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_status" -Value ([Int64] $_fix.statusInt)
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_priority" -Value ([Int64] $_fix.priorityInt)
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "notificationCount" -Value ([Int64] $_fix.notificationCount)
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "sequenceNumber" -Value ([Int64] $_fix.sequenceNumber)
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "iD" -Value $_fix.id
+
+                        #Date methods for local time zone
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_creationDateTimeUTC" -Value ([DateTime] $_fix.creationDateTimeUTC) -Force
+                        Add-Member -InputObject $_return -MemberType NoteProperty -Name "_statusDateTimeUTC" -Value ([DateTime] $_fix.statusDateTimeUTC) -Force
+                        #Need to handle older files that are missing the scheduledAfter property
+                        if ($null -eq $_fix.scheduledAfterUTC) {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_scheduledAfterUTC" -Value ([DateTime] (Get-Date)) -Force        
+                        } else {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "_scheduledAfterUTC" -Value ([DateTime] $_fix.scheduledAfterUTC) -Force
+                        }
+
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name creationDateTime `
+                        {  #Get as local time zone
+                                return $this._creationDateTimeUTC.ToLocalTime()
+                        } `
+                        {  #Set to UTC
+                                param([DateTime] $date)
+                                $this._creationDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                        }
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name statusDateTime `
+                        {  #Get as local time zone
+                                return $this._statusDateTimeUTC.ToLocalTime()
+                        } `
+                        {  #Set to UTC
+                                param([DateTime] $date)
+                                $this._statusDateTimeUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                        }
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name scheduledAfter `
+                        {  #Get as local time zone
+                                return $this._scheduledAfterUTC.ToLocalTime()
+                        } `
+                        {  #Set to UTC
+                                param([DateTime] $date)
+                                $this._scheduledAfterUTC = [System.TimeZoneInfo]::ConvertTimeToUtc($date)
+                        }
+
+                        #Handle databasePath, path or URI.
+                        if ($_fix.databasePath) {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "databasePath" -Value $DatabasePath -Force
+                        } elseif ($_fix.path) {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "path" -Value $Path -Force
+                        } elseif ($_fix.uri) {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "uri" -Value $Uri -Force
+                        }
+
+                        if ("fixResults" -in $_fix.PSobject.Properties.Name) {
+                                Add-Member -InputObject $_return -MemberType NoteProperty -Name "fixResults" -Value $_fix.fixResults -Force
+                        }
+
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name "status" -Value `
+                        { #Get
+                                return [IssueFixStatus]::([enum]::getValues([IssueFixStatus]) | Where-Object value__ -eq $this._status)
+                        } `
+                        { #Set
+                                param (
+                                [IssueFixStatus] $status
+                                )
+                                $this._status = ([IssueFixStatus]::$Status).value__
+                        }
+
+                        Add-Member -InputObject $_return -MemberType ScriptProperty -Name "priority" -Value `
+                        { #Get
+                                return [IssueFixPriority]::([enum]::getValues([IssueFixPriority]) | Where-Object value__ -eq $this._priority)
+                        } `
+                        { #Set
+                                param (
+                                [IssueFixPriority] $priority
+                                )
+                                $this._priority = ([IssueFixPriority]::$priority).value__
+                        }
+                        Write-Output $_return
+                } | Write-Output
         }
 }
