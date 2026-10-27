@@ -12,27 +12,19 @@ param (
 Import-Module -Name $Path\$ModuleName.psd1 -Force
 Import-Module Microsoft.PowerShell.PlatyPS -Force -MinimumVersion 1.0.3
 
-if (Test-Path -Path $DocsPath\$ModuleName) {
-    # Update instead of overwriting existing help files
-    Measure-PlatyPSMarkdown -Path $DocsPath\$ModuleName\*.md
-    Where-Object Filetype -match 'CommandHelp' |
-    Update-MarkdownCommandHelp -Path {$_.FilePath}
-} else {
-    # Initial new build of help files for the module
-    $newMarkdownCommandHelpSplat = @{
-        CommandInfo = Get-Command -Module $ModuleName
-        OutputFolder = $DocsPath
-        HelpVersion = $HelpVersion
-        WithModulePage = $true
-    }
-    New-MarkdownCommandHelp @newMarkdownCommandHelpSplat
+$newMarkdownCommandHelpSplat = @{
+    CommandInfo = Get-Command -Module $ModuleName
+    OutputFolder = $DocsPath
+    HelpVersion = $HelpVersion
+    WithModulePage = $true
 }
+New-MarkdownCommandHelp @newMarkdownCommandHelpSplat
 
 # Convert the markdown help files to MAML format for use with Update-Help
 Measure-PlatyPSMarkdown -Path $DocsPath\$ModuleName\*.md |
     Where-Object Filetype -match 'CommandHelp' |
     Import-MarkdownCommandHelp -Path {$_.FilePath} |
-    Export-MamlCommandHelp -OutputFolder $mamlOutputFolder
+    Export-MamlCommandHelp -OutputFolder $mamlOutputFolder -Force
 
 # Copy maml files to the module folder for use with Update-Help
 if (Test-Path -Path $Path\en-US) {
