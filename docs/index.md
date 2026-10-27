@@ -1,5 +1,7 @@
 # PoshIssues
-PoshIssues is an attempt to imorove PowerShell automation while providing for human decision points and change history.  It is based on wrapping scriptblocks.
+PoshIssues is an attempt to improve PowerShell automation while providing for human decision points and change history.  It is based on wrapping scriptblocks.
+
+Originally created by R. Josh Nylander while working at Whatcom Transportation Authority it continues to be maintaiined and developed by Josh at Nylander Technologies.
 
 # Fix
 A fix is a ScriptBlock to make the change recomended by the fix.  It supports a number of features to allow for reviewing and documenting the fixes.
@@ -22,17 +24,16 @@ The IssueFix object contains:
 
 
 # cmdlets
-+ [New-IssueFix](New-IssueFix.md)
-+ [Set-IssueFix](Set-IssueFix.md)
-+ [Invoke-IssueFix](Invoke-IssueFix.md)
-+ [Write-IssueFix](Write-IssueFix.md)
-+ [Read-IssueFix](Read-IssueFix)
-+ [Archive-IssueFix](Archive-IssueFix)
-+ [Remove-IssueFix](Remove-IssueFix)
-+ [Limit-IssueFix](Limit-IssueFix)
-+ [Approve-IssueFix](Approve-IssueFix)
-+ [Deny-IssueFix](Deny-IssueFix)
-+ [Send-IssueMailMessage](Send-IssueMailMessage)
++ [New-IssueFix](./PoshIssues/New-IssueFix.md)
++ [Set-IssueFix](./PoshIssuesSet-IssueFix.md)
++ [Invoke-IssueFix](./PoshIssuesInvoke-IssueFix.md)
++ [Write-IssueFix](./PoshIssuesWrite-IssueFix.md)
++ [Read-IssueFix](./PoshIssuesRead-IssueFix)
++ [Archive-IssueFix](./PoshIssuesArchive-IssueFix)
++ [Remove-IssueFix](./PoshIssuesRemove-IssueFix)
++ [Limit-IssueFix](./PoshIssuesLimit-IssueFix)
++ [Approve-IssueFix](./PoshIssuesApprove-IssueFix)
++ [Deny-IssueFix](./PoshIssuesDeny-IssueFix)
 
 ## Fixes
 Review, cancel or complete, remove issue fixes.  Fixes in a pending state can be canceled or completed.  Fixes can come from results or be loaded from files or the database.  Fixes that are automatically executed ("Completed" or "Error" states) can not be canceled or completed, only those in a "Pending" state.  New-IssueFix creates a fix object for return and use in checks script blocks or for direclty.  All cmdlets passthru any fix objects on the pipeline.
@@ -71,15 +72,10 @@ The IssueFix has sequence numbers that are used for sorting fixes.  Invoke-Issue
 
 ## Notification
 Support sending notification of fixes.  Starting off with email but could add other channels.
-### Send-IssueMailMessage
-Sends and email for each applicable IssurFix.  Updating notifocationCount by default.  Choose which types of fixes to include in the notification.
-
 
 ### Notification Count
 
 Each time a notificaton is sent for a fix the notificationCount is decremented by one. By default, only fixes with a notification count greater then 0 are sent. This allows for control over how often a fix is notified about.  If the IssueFix creator does not want any notifications sent (by default), set to 0.  If only want to be notified once, set to 1.  The notification cmdlets provide control over when this value is used.  For example, parameters allow only using the notification count for "Pending" fixes and instead setting "Completed/Error" fixes to 0 after first notification.  Or the notification cmdlet can send for all fixes and ignore this value completely.
-
-
 
 # Database
 The data will be stored in a folder with each object stored as a seperate JSON file.  This should reduce write conflicts and simplify data management tools.  The databasePath folder must exist.
@@ -117,8 +113,6 @@ In order to execute the fixes, read the fixes and invoke them.  It is recommende
 Read-IssueFix -isReady -DatabasePath 'c:\issuesdb' | Invoke-IssueFix | Write-IssueFix -DatabasePath 'c:\issuesdb'
 # Note, invoke will only process those in Ready status so the isPending parameter is not required on the read cmdlet BUT it improves performance :-)
 ```
-
-When finished a notification of all fixes, either still pending or finished, can be sent with the Send-IssueFixMail cmdlet. Each time a notificaton is sent for a fix the notificationCount is decremented by one. By default, only fixes with a notification count greater then 0 are sent. This allows for control over how often a fix is notified about. Parameters for the cmdlet can be saved in the database using Set-IssueFixMail cmdlet.
 
 If all done, fixes that are completed or errored can be removed using Remove-IssueFix, from the database, allowing those same fixes to be presented again.  For example, an issue can be raised, addressed and then removed so the user can be notified if it comes up again.
 
